@@ -19,11 +19,22 @@ struct VerificationKey {
 
     union {
         rsa3072Pkcs1Sha256 @0 :Rsa3072Pkcs1Sha256;
-        reserved @1 :Void;
+        rsa2048Pkcs1Sha256 @1 :Rsa2048Pkcs1Sha256;
     }
 
     struct Rsa3072Pkcs1Sha256 {
         # An `rsa3072-pkcs1-sha256` verification key.
+
+        pkcs1Der @0 :Data;
+        # The ASN.1 DER encoding of an `RSAPublicKey`, as defined in
+        # [Appendix A.1.1 of RFC 8017].
+        #
+        # [Appendix A.1.1 of RFC 8017]:
+        # <https://www.rfc-editor.org/info/rfc8017/#appendix-A.1.1>
+    }
+
+    struct Rsa2048Pkcs1Sha256 {
+        # An `rsa2048-pkcs1-sha256` verification key.
 
         pkcs1Der @0 :Data;
         # The ASN.1 DER encoding of an `RSAPublicKey`, as defined in
@@ -47,11 +58,22 @@ struct SigningKey {
 
         union {
             rsa3072Pkcs1Sha256 @0 :Rsa3072Pkcs1Sha256;
-            reserved @1 :Void;
+            rsa2048Pkcs1Sha256 @1 :Rsa2048Pkcs1Sha256;
         }
 
         struct Rsa3072Pkcs1Sha256 {
             # An `rsa3072-pkcs1-sha256` software signing key.
+
+            pkcs1Der @0 :Data;
+            # The ASN.1 DER encoding of an `RSAPrivateKey`, as defined
+            # in [Appendix A.1.2 of RFC 8017].
+            #
+            # [Appendix A.1.2 of RFC 8017]:
+            # <https://www.rfc-editor.org/info/rfc8017/#appendix-A.1.2>
+        }
+
+        struct Rsa2048Pkcs1Sha256 {
+            # An `rsa2048-pkcs1-sha256` software signing key.
 
             pkcs1Der @0 :Data;
             # The ASN.1 DER encoding of an `RSAPrivateKey`, as defined

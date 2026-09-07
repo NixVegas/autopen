@@ -8,11 +8,21 @@
 //! 8017], using RSA keys with 3072‐bit moduli and SHA‐256 as the hash
 //! function.
 //!
+//! Backed by the pure‐Rust `rsa` crate (num‐bigint), so it works on
+//! CPUs without the BMI1/AVX features graviola requires.
+//!
 //! [Section 8.2 of RFC 8017]: <https://www.rfc-editor.org/info/rfc8017/#section-8.2>
 
 use std::fmt::{self, Debug};
 
-use graviola::signing::rsa;
+use rsa::{
+    RsaPublicKey,
+    pkcs1::{DecodeRsaPublicKey as _, EncodeRsaPublicKey as _},
+    pkcs1v15,
+    signature::Verifier as _,
+    traits::PublicKeyParts as _,
+};
+use sha2::Sha256;
 
 use crate::{
     autopen_capnp::verification_key::rsa3072_pkcs1_sha256,
@@ -21,16 +31,13 @@ use crate::{
     x509,
 };
 
+/// The expected modulus length in bytes (3072 bits).
+const MODULUS_LEN_BYTES: usize = 384;
+
 /// An RSA verification key with a 3072‐bit modulus.
-pub(crate) struct VerificationKey(Box<rsa::VerifyingKey>);
+pub(crate) struct VerificationKey(RsaPublicKey);
 
 impl VerificationKey {
-    /// Creates a verification key from an [`rsa::VerifyingKey`].
-    pub(crate) fn from_graviola(inner: rsa::VerifyingKey) -> Self {
-        // TODO: Verify key size.
-        Self(Box::new(inner))
-    }
-
     /// Decodes a verification key from the ASN.1 DER encoding of an
     /// `RSAPublicKey`, as defined in [Appendix A.1.1 of RFC 8017].
     ///
@@ -38,11 +45,27 @@ impl VerificationKey {
     ///
     /// # Errors
     ///
-    /// Returns an error if decoding fails.
-    fn from_pkcs1_der(bytes: &[u8; PKCS1_DER_LEN]) -> Result<Self, graviola::Error> {
-        Ok(Self::from_graviola(rsa::VerifyingKey::from_pkcs1_der(
-            &bytes[..],
-        )?))
+    /// Returns an error if decoding fails or the modulus is not 3072‐bit.
+    pub(crate) fn from_pkcs1_der(bytes: &[u8]) -> Result<Self, String> {
+        let key = RsaPublicKey::from_pkcs1_der(bytes)
+            .map_err(|err| format!("failed to decode RSAPublicKey: {err}"))?;
+        Self::checked(key)
+    }
+
+    /// Enforces the expected modulus size.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the modulus is not [`MODULUS_LEN_BYTES`] bytes.
+    fn checked(key: RsaPublicKey) -> Result<Self, String> {
+        if key.size() == MODULUS_LEN_BYTES {
+            Ok(Self(key))
+        } else {
+            Err(format!(
+                "expected a {MODULUS_LEN_BYTES}-byte modulus, got {}",
+                key.size()
+            ))
+        }
     }
 
     /// Encodes the verification key into the ASN.1 DER encoding of an
@@ -50,34 +73,20 @@ impl VerificationKey {
     ///
     /// [Appendix A.1.1 of RFC 8017]: <https://www.rfc-editor.org/info/rfc8017/#appendix-A.1.1>
     #[expect(clippy::missing_panics_doc, reason = "invariant")]
-    fn to_pkcs1_der(&self, buf: &mut [u8; PKCS1_DER_LEN]) {
-        assert_eq!(
-            self.0.to_pkcs1_der(buf).map(<[u8]>::len),
-            Ok(PKCS1_DER_LEN),
-            "encoding should be PKCS1_DER_LEN bytes",
-        );
+    fn to_pkcs1_der(&self) -> Vec<u8> {
+        self.0
+            .to_pkcs1_der()
+            .expect("a valid RSA public key should encode")
+            .as_bytes()
+            .to_vec()
     }
 }
 
-/// The size in bytes of an ASN.1 DER encoding of an
-/// `RSAPublicKey`, as defined in [Appendix A.1.1 of RFC 8017], with a
-/// 3072‐bit modulus and a public exponent of 65537.
-///
-/// [Appendix A.1.1 of RFC 8017]: <https://www.rfc-editor.org/info/rfc8017/#appendix-A.1.1>
-pub(crate) const PKCS1_DER_LEN: usize = 398;
-
 impl Verifier for VerificationKey {
-    #[tracing::instrument(
-        level = tracing::Level::DEBUG,
-        skip(message),
-        fields(msg = message),
-        ret,
-        err(level = tracing::Level::DEBUG),
-    )]
     fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
-        self.0
-            .verify_pkcs1_sha256(signature, message)
-            .map_err(|_err| VerifyError)
+        let key = pkcs1v15::VerifyingKey::<Sha256>::new(self.0.clone());
+        let signature = pkcs1v15::Signature::try_from(signature).map_err(|_err| VerifyError)?;
+        key.verify(message, &signature).map_err(|_err| VerifyError)
     }
 }
 
@@ -87,18 +96,14 @@ impl x509::SubjectPublicKey for VerificationKey {
     }
 
     fn to_subject_public_key(&self) -> Vec<u8> {
-        let mut buf = [0; _];
-        self.to_pkcs1_der(&mut buf);
-        buf.to_vec()
+        self.to_pkcs1_der()
     }
 }
 
 impl Debug for VerificationKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut buf = [0; _];
-        self.to_pkcs1_der(&mut buf);
         f.debug_tuple("VerificationKey::from_pkcs1_der")
-            .field(&buf)
+            .field(&self.to_pkcs1_der())
             .finish()
     }
 }
@@ -110,24 +115,11 @@ impl Serialize for VerificationKey {
         _restorer: &restorer::Client,
         reader: rsa3072_pkcs1_sha256::Reader<'_>,
     ) -> capnp::Result<Self> {
-        reader
-            .get_pkcs1_der()?
-            .as_array()
-            .ok_or(graviola::Error::OutOfRange)
-            .and_then(Self::from_pkcs1_der)
-            .map_err(|err| capnp::Error::failed(err.to_string()))
+        Self::from_pkcs1_der(reader.get_pkcs1_der()?).map_err(capnp::Error::failed)
     }
 
-    fn build_capnp(&self, builder: rsa3072_pkcs1_sha256::Builder<'_>) -> capnp::Result<()> {
-        let buf = builder
-            .init_pkcs1_der(
-                PKCS1_DER_LEN
-                    .try_into()
-                    .expect("PKCS1_DER_LEN should fit into u32"),
-            )
-            .as_mut_array()
-            .expect("builder should be the requested size");
-        self.to_pkcs1_der(buf);
+    fn build_capnp(&self, mut builder: rsa3072_pkcs1_sha256::Builder<'_>) -> capnp::Result<()> {
+        builder.set_pkcs1_der(&self.to_pkcs1_der());
         Ok(())
     }
 }

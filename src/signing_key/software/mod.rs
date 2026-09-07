@@ -4,6 +4,7 @@
 
 //! Software signing keys.
 
+pub(crate) mod rsa2048_pkcs1_sha256;
 pub(crate) mod rsa3072_pkcs1_sha256;
 
 use crate::{
@@ -17,6 +18,8 @@ use crate::{
 pub(crate) enum SigningKey {
     /// A software `rsa3072-pkcs1-sha256` signing key.
     Rsa3072Pkcs1Sha256(rsa3072_pkcs1_sha256::SigningKey),
+    /// A software `rsa2048-pkcs1-sha256` signing key.
+    Rsa2048Pkcs1Sha256(rsa2048_pkcs1_sha256::SigningKey),
 }
 
 impl SigningKey {
@@ -25,6 +28,7 @@ impl SigningKey {
     pub(crate) fn into_signer(self) -> signer::Client {
         match self {
             Self::Rsa3072Pkcs1Sha256(key) => capnp_rpc::new_client(key),
+            Self::Rsa2048Pkcs1Sha256(key) => capnp_rpc::new_client(key),
         }
     }
 }
@@ -40,13 +44,16 @@ impl Serialize for SigningKey {
             software::Rsa3072Pkcs1Sha256(reader) => {
                 Ok(rsa3072_pkcs1_sha256::SigningKey::read_capnp(restorer, reader?)?.into())
             }
-            software::Reserved(()) => Err(capnp::NotInSchema(1).into()),
+            software::Rsa2048Pkcs1Sha256(reader) => {
+                Ok(rsa2048_pkcs1_sha256::SigningKey::read_capnp(restorer, reader?)?.into())
+            }
         }
     }
 
     fn build_capnp(&self, builder: software::Builder<'_>) -> capnp::Result<()> {
         match self {
             Self::Rsa3072Pkcs1Sha256(key) => key.build_capnp(builder.init_rsa3072_pkcs1_sha256()),
+            Self::Rsa2048Pkcs1Sha256(key) => key.build_capnp(builder.init_rsa2048_pkcs1_sha256()),
         }
     }
 }
@@ -54,5 +61,11 @@ impl Serialize for SigningKey {
 impl From<rsa3072_pkcs1_sha256::SigningKey> for SigningKey {
     fn from(key: rsa3072_pkcs1_sha256::SigningKey) -> Self {
         Self::Rsa3072Pkcs1Sha256(key)
+    }
+}
+
+impl From<rsa2048_pkcs1_sha256::SigningKey> for SigningKey {
+    fn from(key: rsa2048_pkcs1_sha256::SigningKey) -> Self {
+        Self::Rsa2048Pkcs1Sha256(key)
     }
 }

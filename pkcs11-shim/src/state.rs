@@ -91,6 +91,9 @@ pub(crate) struct Session {
 pub(crate) struct State {
     /// Proxy objects (empty if `AUTOPEN_CERT` is unset/unreadable).
     objects: Vec<Object>,
+    /// The RSA signature/modulus length in bytes, from the certificate (256 for
+    /// RSA‐2048, 384 for RSA‐3072). Defaults to 384 when no cert is available.
+    sig_len: usize,
     /// Open sessions.
     sessions: Vec<Session>,
     /// Next session handle to hand out.
@@ -100,15 +103,21 @@ pub(crate) struct State {
 impl State {
     /// Builds the state, reading the certificate from `AUTOPEN_CERT`.
     fn new() -> Self {
-        let objects = build_objects().unwrap_or_else(|err| {
+        let (objects, sig_len) = build_objects().unwrap_or_else(|err| {
             eprintln!("autopen-pkcs11: no objects available: {err}");
-            Vec::new()
+            (Vec::new(), 384)
         });
         Self {
             objects,
+            sig_len,
             sessions: Vec::new(),
             next_session: 1,
         }
+    }
+
+    /// The RSA signature/modulus length in bytes for the proxy key.
+    pub(crate) fn sig_len(&self) -> usize {
+        self.sig_len
     }
 
     /// Opens a new session, returning its handle.
@@ -232,7 +241,7 @@ pub(crate) fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
 /// `AUTOPEN_LABEL`) and the id defaults to `[0x01]` (override with `AUTOPEN_ID`,
 /// a hex string); the key and certificate share the id so consumers can pair
 /// them.
-fn build_objects() -> Result<Vec<Object>, String> {
+fn build_objects() -> Result<(Vec<Object>, usize), String> {
     let path = env::var("AUTOPEN_CERT").map_err(|_| "AUTOPEN_CERT is not set".to_owned())?;
     let data = fs::read(&path).map_err(|err| format!("failed to read {path}: {err}"))?;
 
@@ -258,6 +267,9 @@ fn build_objects() -> Result<Vec<Object>, String> {
         _ => return Err("certificate does not carry an RSA key".to_owned()),
     };
     let subject = cert.subject().as_raw().to_vec();
+    // The signature length equals the modulus byte length (256 for RSA‐2048,
+    // 384 for RSA‐3072); the shim advertises it to the PKCS#11 consumer.
+    let sig_len = modulus.len();
 
     let label = env::var("AUTOPEN_LABEL").unwrap_or_else(|_| "autopen".to_owned());
     let id = match env::var("AUTOPEN_ID") {
@@ -320,7 +332,7 @@ fn build_objects() -> Result<Vec<Object>, String> {
         ]),
     };
 
-    Ok(vec![private_key, public_key, certificate])
+    Ok((vec![private_key, public_key, certificate], sig_len))
 }
 
 /// Strips leading zero bytes from a big-endian integer (PKCS#11 wants the

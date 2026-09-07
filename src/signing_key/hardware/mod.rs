@@ -13,20 +13,23 @@
 pub(crate) mod uri;
 
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     fmt::{self, Debug},
     fs,
     rc::Rc,
 };
 
+use camino::{Utf8Path, Utf8PathBuf};
 use color_eyre::eyre::{self, OptionExt as _, WrapErr as _};
 use cryptoki::{
     context::{CInitializeArgs, CInitializeFlags, Pkcs11},
+    error::{Error, RvError},
     mechanism::Mechanism,
     object::{Attribute, AttributeType, ObjectClass, ObjectHandle},
     session::{Session, UserType},
     types::AuthPin,
 };
-use graviola::signing::rsa;
 use tracing::{debug, error};
 
 use crate::{
@@ -35,9 +38,6 @@ use crate::{
     signing_key::hardware::uri::{ResolvedKey, resolve_uri},
     verification_key::{self, VerificationKey},
 };
-
-/// The size in bytes of an RSA‐3072 signature (the modulus length).
-const MODULUS_LEN_BYTES: usize = 384;
 
 /// A signing key backed by a PKCS#11 token, selected by a `pkcs11:` URI.
 pub(crate) struct HardwareSigner {
@@ -109,6 +109,37 @@ pub(crate) fn read_verification_key(uri: &str) -> eyre::Result<VerificationKey> 
     read_verification_key_from(&session, &resolved.key_id)
 }
 
+thread_local! {
+    /// One initialized `Pkcs11` context per module path, shared across every key
+    /// that uses that module. `C_Initialize` is global to a module, so loading +
+    /// initializing the same module a second time returns
+    /// `CKR_CRYPTOKI_ALREADY_INITIALIZED` (which is fatal to serving two keys
+    /// from one token). Sharing one context — a cheap `Arc` clone — initializes
+    /// each module exactly once and finalizes it once, when the process exits.
+    static MODULES: RefCell<HashMap<Utf8PathBuf, Pkcs11>> = RefCell::new(HashMap::new());
+}
+
+/// Returns a shared, initialized `Pkcs11` context for `module_path`, loading and
+/// initializing the module on first use and reusing it thereafter.
+///
+/// # Errors
+///
+/// Returns an error if the module cannot be loaded or initialized.
+fn module_context(module_path: &Utf8Path) -> eyre::Result<Pkcs11> {
+    MODULES.with_borrow_mut(|modules| {
+        if let Some(pkcs11) = modules.get(module_path) {
+            return Ok(pkcs11.clone());
+        }
+        let pkcs11 = Pkcs11::new(module_path)
+            .wrap_err_with(|| format!("Failed to load PKCS#11 module {module_path}"))?;
+        pkcs11
+            .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
+            .wrap_err("Failed to initialize the PKCS#11 module")?;
+        modules.insert(module_path.to_owned(), pkcs11.clone());
+        Ok(pkcs11)
+    })
+}
+
 /// Opens and logs into a token session for the given URI.
 ///
 /// # Errors
@@ -127,11 +158,7 @@ fn open(uri: &str) -> eyre::Result<(Session, ResolvedKey)> {
         })
         .transpose()?;
 
-    let pkcs11 = Pkcs11::new(&resolved.module_path)
-        .wrap_err_with(|| format!("Failed to load PKCS#11 module {}", resolved.module_path))?;
-    pkcs11
-        .initialize(CInitializeArgs::new(CInitializeFlags::OS_LOCKING_OK))
-        .wrap_err("Failed to initialize the PKCS#11 module")?;
+    let pkcs11 = module_context(&resolved.module_path)?;
 
     let slot = pkcs11
         .get_slots_with_token()
@@ -150,9 +177,15 @@ fn open(uri: &str) -> eyre::Result<(Session, ResolvedKey)> {
         .open_ro_session(slot)
         .wrap_err("Failed to open a token session")?;
     if let Some(pin) = pin {
-        session
-            .login(UserType::User, Some(&AuthPin::from(pin)))
-            .wrap_err("Failed to log into the token")?;
+        // PKCS#11 login state is per-token, not per-session: once another key on
+        // the same token has logged this application in, `C_Login` returns
+        // CKR_USER_ALREADY_LOGGED_IN — which is exactly the state we want, as all
+        // sessions on the token share the login. Accept it as success.
+        if let Err(err) = session.login(UserType::User, Some(&AuthPin::from(pin)))
+            && !matches!(err, Error::Pkcs11(RvError::UserAlreadyLoggedIn, _))
+        {
+            return Err(err).wrap_err("Failed to log into the token");
+        }
     }
     Ok((session, resolved))
 }
@@ -197,11 +230,18 @@ fn read_verification_key_from(session: &Session, key_id: &[u8]) -> eyre::Result<
     let exponent = exponent.ok_or_eyre("Token public key has no public exponent")?;
 
     let der = rsa_public_key_der(&modulus, &exponent);
-    let inner = rsa::VerifyingKey::from_pkcs1_der(&der)
-        .map_err(|err| eyre::eyre!("Token public key is not a valid RSA key: {err}"))?;
-    Ok(VerificationKey::from(
-        verification_key::rsa3072_pkcs1_sha256::VerificationKey::from_graviola(inner),
-    ))
+    // Select the algorithm by the token key's modulus size (raw CKA_MODULUS is
+    // 256 bytes for RSA‐2048, 384 for RSA‐3072). The verification key is the
+    // portable RustCrypto one, so no graviola op runs on the daemon host.
+    Ok(match modulus.len() {
+        256 => verification_key::rsa2048_pkcs1_sha256::VerificationKey::from_pkcs1_der(&der)
+            .map_err(|err| eyre::eyre!("Token public key: {err}"))?
+            .into(),
+        384 => verification_key::rsa3072_pkcs1_sha256::VerificationKey::from_pkcs1_der(&der)
+            .map_err(|err| eyre::eyre!("Token public key: {err}"))?
+            .into(),
+        len => eyre::bail!("Unsupported RSA modulus size: {len} bytes (want 256 or 384)"),
+    })
 }
 
 /// Finds exactly one object matching `template`.
@@ -282,7 +322,7 @@ impl signer::Server for HardwareSigner {
             error!(error = ?err);
             capnp::Error::failed("Failed to sign message".to_owned())
         })?;
-        if signature.len() != MODULUS_LEN_BYTES {
+        if signature.len() != self.verification_key.signature_len() {
             error!(len = signature.len(), "unexpected signature length");
             return Err(capnp::Error::failed(
                 "Unexpected signature length".to_owned(),
@@ -343,7 +383,7 @@ mod tests {
         let message = b"the quick brown fox";
         let signature = signer.sign_raw(message)?;
         ensure!(
-            signature.len() == MODULUS_LEN_BYTES,
+            signature.len() == signer.verification_key.signature_len(),
             "unexpected signature length: {}",
             signature.len()
         );

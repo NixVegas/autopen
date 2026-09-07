@@ -37,9 +37,6 @@ use cryptoki_sys::{
     CK_BYTE, CK_MECHANISM, CKR_DEVICE_ERROR, CKR_GENERAL_ERROR, CKR_KEY_HANDLE_INVALID,
 };
 
-/// RSA-3072 signature length, in bytes.
-const SIG_LEN: usize = 384;
-
 /// Relays a message to `autopen serve` for signing, via the remote signing key
 /// at `AUTOPEN_REMOTE_KEY`. Maps failures to PKCS#11 return values.
 fn sign_message(message: &[u8]) -> Result<Vec<u8>, CK_RV> {
@@ -75,8 +72,6 @@ const SLOT_ID: CK_SLOT_ID = 0;
 const TOKEN_LABEL: &str = "autopen";
 /// The manufacturer id reported throughout.
 const MANUFACTURER: &str = "autopen";
-/// RFC 8017 RSA‐3072 modulus size, in bits.
-const RSA_3072_BITS: CK_ULONG = 3072;
 /// PKCS#11 `CK_UNAVAILABLE_INFORMATION` (not exported by `cryptoki-sys`).
 const UNAVAILABLE: CK_ULONG = CK_ULONG::MAX;
 
@@ -219,8 +214,9 @@ unsafe extern "C" fn C_GetMechanismInfo(
     let Some(info) = (unsafe { info.as_mut() }) else {
         return CKR_ARGUMENTS_BAD;
     };
-    info.ulMinKeySize = RSA_3072_BITS;
-    info.ulMaxKeySize = RSA_3072_BITS;
+    let key_bits = (state::with_state(|s| s.sig_len()) * 8) as CK_ULONG;
+    info.ulMinKeySize = key_bits;
+    info.ulMaxKeySize = key_bits;
     info.flags = CKF_SIGN as CK_FLAGS;
     CKR_OK
 }
@@ -452,12 +448,13 @@ unsafe extern "C" fn C_SignFinal(
     if !state::with_state(|s| s.sign_active(session)) {
         return CKR_OPERATION_NOT_INITIALIZED;
     }
+    let sig_len = state::with_state(|s| s.sig_len());
     if signature.is_null() {
-        *signature_len = SIG_LEN as CK_ULONG;
+        *signature_len = sig_len as CK_ULONG;
         return CKR_OK;
     }
-    if (*signature_len as usize) < SIG_LEN {
-        *signature_len = SIG_LEN as CK_ULONG;
+    if (*signature_len as usize) < sig_len {
+        *signature_len = sig_len as CK_ULONG;
         return CKR_BUFFER_TOO_SMALL;
     }
     let message = state::with_state(|s| s.sign_take(session)).unwrap_or_default();
@@ -480,12 +477,13 @@ unsafe extern "C" fn C_Sign(
     if !state::with_state(|s| s.sign_active(session)) {
         return CKR_OPERATION_NOT_INITIALIZED;
     }
+    let sig_len = state::with_state(|s| s.sig_len());
     if signature.is_null() {
-        *signature_len = SIG_LEN as CK_ULONG;
+        *signature_len = sig_len as CK_ULONG;
         return CKR_OK;
     }
-    if (*signature_len as usize) < SIG_LEN {
-        *signature_len = SIG_LEN as CK_ULONG;
+    if (*signature_len as usize) < sig_len {
+        *signature_len = sig_len as CK_ULONG;
         return CKR_BUFFER_TOO_SMALL;
     }
     let message = if data.is_null() {

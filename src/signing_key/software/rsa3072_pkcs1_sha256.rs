@@ -115,9 +115,17 @@ impl signer::Server for SigningKey {
         mut results: signer::GetVerificationKeyResults,
     ) -> capnp::Result<()> {
         let mut results = results.get();
-        verification_key::VerificationKey::from(VerificationKey::from_graviola(
-            self.0.public_key(),
-        ))
+        // Bridge the graviola public key to the (RustCrypto) verification key
+        // via its RSAPublicKey DER, so the verification-key type stays portable.
+        let mut der_buf = [0_u8; 512];
+        let der = self
+            .0
+            .public_key()
+            .to_pkcs1_der(&mut der_buf)
+            .map_err(|err| capnp::Error::failed(err.to_string()))?;
+        verification_key::VerificationKey::from(
+            VerificationKey::from_pkcs1_der(der).map_err(capnp::Error::failed)?,
+        )
         .build_capnp(results.reborrow().init_verification_key())?;
         debug!(results = ?results.into_reader());
         Ok(())
