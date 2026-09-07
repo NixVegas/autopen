@@ -12,7 +12,7 @@ skip = [
 ]
 
 [licenses]
-allow = ["BlueOak-1.0.0", "ISC", "MIT", "Unicode-3.0"]
+allow = ["Apache-2.0", "BlueOak-1.0.0", "ISC", "MIT", "Unicode-3.0"]
 
 [sources]
 allow-git = [

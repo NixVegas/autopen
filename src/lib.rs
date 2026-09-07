@@ -6,6 +6,7 @@
 
 mod autopen_capnp;
 mod cli;
+pub mod client;
 mod local;
 mod signing_key;
 mod socket_activation;

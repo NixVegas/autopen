@@ -12,7 +12,12 @@ use iddqd::IdHashMap;
 use tokio::{fs::File, net::UnixListener, signal, task::JoinSet};
 use tracing::{error, info};
 
-use crate::{cli::Subcommand, local::Bootstrap, signing_key::SigningKey, unix_socket_server};
+use crate::{
+    cli::Subcommand,
+    local::Bootstrap,
+    signing_key::{SigningKey, hardware::HardwareSigner},
+    unix_socket_server,
+};
 
 /// Provide access to signing keys over a socket.
 ///
@@ -32,6 +37,16 @@ pub(crate) struct Command {
         value_names = ["FILE_REF_PATH", "SIGNING_KEY_PATH"],
     )]
     signing_key_refs: Vec<Vec<Utf8PathBuf>>,
+    /// Map a file reference to a PKCS#11 token key selected by a `pkcs11:` URI.
+    ///
+    /// The URI (RFC 7512) carries `module-path`, a token selector, the object
+    /// `id`, and `pin-source=file:<path>` for login. Repeat for multiple keys.
+    #[arg(
+        long = "hardware-key",
+        num_args = 2,
+        value_names = ["PKCS11_URI", "FILE_REF_PATH"],
+    )]
+    hardware_keys: Vec<Vec<String>>,
 }
 
 impl Subcommand for Command {
@@ -46,6 +61,23 @@ impl Subcommand for Command {
                 .wrap_err_with(|| format!("Failed to open file reference {file_ref_path}"))?;
             let signing_key: SigningKey = local.load(&signing_key_path).await?;
             let signer = signing_key.into_signer();
+            let known_ref = unix_socket_server::KnownRef::new(file, signer)
+                .await
+                .wrap_err_with(|| format!("Failed to identify file reference {file_ref_path}"))?;
+            refs.insert_unique(known_ref).map_err(|_err| {
+                eyre!("File reference {file_ref_path} was mapped multiple times")
+            })?;
+        }
+        for hardware_key in self.hardware_keys {
+            let [uri, file_ref_path]: [String; 2] = hardware_key
+                .try_into()
+                .expect("clap should enforce num_args");
+            let file = File::open(&file_ref_path)
+                .await
+                .wrap_err_with(|| format!("Failed to open file reference {file_ref_path}"))?;
+            let signer = HardwareSigner::from_uri(&uri)
+                .wrap_err_with(|| format!("Failed to open hardware key {uri}"))?
+                .into_signer();
             let known_ref = unix_socket_server::KnownRef::new(file, signer)
                 .await
                 .wrap_err_with(|| format!("Failed to identify file reference {file_ref_path}"))?;

@@ -5,6 +5,7 @@
 //! The `autopen signing-key` subcommand.
 
 mod get_verification_key;
+mod hardware;
 mod remote;
 mod software;
 
@@ -27,6 +28,8 @@ pub(crate) enum Command {
     Software(software::Command),
     #[command(subcommand)]
     Remote(remote::Command),
+    #[command(subcommand)]
+    Hardware(hardware::Command),
     GetVerificationKey(get_verification_key::Command),
 }
 
@@ -35,6 +38,7 @@ impl Subcommand for Command {
         match self {
             Self::Software(cmd) => cmd.run(local).await,
             Self::Remote(cmd) => cmd.run(local).await,
+            Self::Hardware(cmd) => cmd.run(local).await,
             Self::GetVerificationKey(cmd) => cmd.run(local).await,
         }
     }

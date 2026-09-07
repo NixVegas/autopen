@@ -35,11 +35,29 @@ rustPlatform.buildRustPackage {
 
   useNextest = true;
 
+  # Build the whole workspace so the PKCS#11 shim cdylib (a member nothing else
+  # depends on) is compiled, not just the `autopen` binary.
+  cargoBuildFlags = [ "--workspace" ];
+
   cargoTestFlags = [ "--max-fail=all" ];
 
   strictDeps = true;
 
   __structuredAttrs = true;
+
+  # The workspace also builds the sign-only PKCS#11 client shim (a cdylib);
+  # buildRustPackage installs binaries but not cdylibs, so install it here.
+  # Consumers reference it as `${autopen}/lib/libautopen_pkcs11.so`.
+  #
+  # The cargo-* check derivations (clippy/doc/audit/deny) reuse this package via
+  # `overrideAttrs` but skip the cargo install (`dontCargoInstall`) and never
+  # build the release cdylib, so only install it in the real build.
+  postInstall = ''
+    if [ -z "''${dontCargoInstall:-}" ]; then
+      mkdir -p "$out/lib"
+      cp target/*/release/libautopen_pkcs11.so "$out/lib/"
+    fi
+  '';
 
   passthru = {
     lib = callPackage ./lib { };

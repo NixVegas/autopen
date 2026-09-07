@@ -99,6 +99,12 @@
 
             packages = [
               pkgs.rust-analyzer
+              # Hardware-signing (treewide/hardware-signing): a software PKCS#11
+              # token for hermetic tests (kryoptic), a CLI to drive it (opensc's
+              # pkcs11-tool), and openssl for signature verification.
+              pkgs.kryoptic
+              pkgs.opensc
+              pkgs.openssl
             ]
             ++ attrValues treefmtEval.${system}.config.build.programs;
           };
