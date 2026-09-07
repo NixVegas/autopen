@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: BlueOak-1.0.0
 
-//! `rsa3072-pkcs1-sha256` software signing keys.
+//! `rsa2048-pkcs1-sha256` software signing keys.
 //!
-//! See [`crate::verification_key::rsa3072_pkcs1_sha256`] for
+//! See [`crate::verification_key::rsa2048_pkcs1_sha256`] for
 //! more information.
 
 use std::{
@@ -16,12 +16,12 @@ use graviola::signing::rsa;
 use tracing::{debug, error, record_all};
 
 use crate::{
-    autopen_capnp::{signer, signing_key::software::rsa3072_pkcs1_sha256},
+    autopen_capnp::{signer, signing_key::software::rsa2048_pkcs1_sha256},
     local::{Serialize, restorer},
-    verification_key::{self, rsa3072_pkcs1_sha256::VerificationKey},
+    verification_key::{self, rsa2048_pkcs1_sha256::VerificationKey},
 };
 
-/// An RSA signing key with a 3072‐bit modulus.
+/// An RSA signing key with a 2048‐bit modulus.
 pub(crate) struct SigningKey(Box<rsa::SigningKey>);
 
 impl SigningKey {
@@ -35,7 +35,7 @@ impl SigningKey {
     /// Forwards errors on from the underlying key generation method.
     pub(crate) fn generate() -> Result<Self, graviola::Error> {
         Ok(Self(Box::new(rsa::SigningKey::generate(
-            rsa::KeySize::Rsa3072,
+            rsa::KeySize::Rsa2048,
         )?)))
     }
 
@@ -47,7 +47,7 @@ impl SigningKey {
     /// # Errors
     ///
     /// Returns an error if decoding fails or the modulus size is not
-    /// 3072 bits.
+    /// 2048 bits.
     fn from_pkcs1_der(bytes: &[u8]) -> Result<Self, graviola::Error> {
         let signing_key = Box::new(rsa::SigningKey::from_pkcs1_der(bytes)?);
         (signing_key.modulus_len_bytes() == MODULUS_LEN_BYTES)
@@ -68,17 +68,17 @@ impl SigningKey {
 }
 
 /// The expected size of the modulus in bits.
-const MODULUS_LEN_BITS: usize = 3072;
+const MODULUS_LEN_BITS: usize = 2048;
 
 /// The expected size of the modulus in bytes.
 const MODULUS_LEN_BYTES: usize = MODULUS_LEN_BITS / 8;
 
 /// The maximum size in bytes of an ASN.1 DER encoding of an
 /// `RSAPrivateKey`, as defined in [Appendix A.1.2 of RFC 8017], with
-/// two primes, a 3072‐bit modulus, and a public exponent of 65537.
+/// two primes, a 2048‐bit modulus, and a public exponent of 65537.
 ///
 /// [Appendix A.1.2 of RFC 8017]: <https://www.rfc-editor.org/info/rfc8017/#appendix-A.1.2>
-pub(crate) const PKCS1_DER_MAX_LEN: usize = 1769;
+pub(crate) const PKCS1_DER_MAX_LEN: usize = 1218;
 
 impl signer::Server for SigningKey {
     #[tracing::instrument(
@@ -139,17 +139,17 @@ impl Debug for SigningKey {
 }
 
 impl Serialize for SigningKey {
-    type Owned = rsa3072_pkcs1_sha256::Owned;
+    type Owned = rsa2048_pkcs1_sha256::Owned;
 
     fn read_capnp(
         _restorer: &restorer::Client,
-        reader: rsa3072_pkcs1_sha256::Reader<'_>,
+        reader: rsa2048_pkcs1_sha256::Reader<'_>,
     ) -> capnp::Result<Self> {
         Self::from_pkcs1_der(reader.get_pkcs1_der()?)
             .map_err(|err| capnp::Error::failed(err.to_string()))
     }
 
-    fn build_capnp(&self, mut builder: rsa3072_pkcs1_sha256::Builder<'_>) -> capnp::Result<()> {
+    fn build_capnp(&self, mut builder: rsa2048_pkcs1_sha256::Builder<'_>) -> capnp::Result<()> {
         builder.set_pkcs1_der(self.to_pkcs1_der(&mut [0; _]));
         Ok(())
     }

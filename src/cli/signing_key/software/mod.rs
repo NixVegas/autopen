@@ -4,6 +4,7 @@
 
 //! The `autopen signing-key software` subcommand.
 
+mod rsa2048_pkcs1_sha256;
 mod rsa3072_pkcs1_sha256;
 
 use color_eyre::eyre;
@@ -23,12 +24,15 @@ use crate::{cli::Subcommand, local::Bootstrap};
 pub(crate) enum Command {
     #[command(subcommand)]
     Rsa3072Pkcs1Sha256(rsa3072_pkcs1_sha256::Command),
+    #[command(subcommand)]
+    Rsa2048Pkcs1Sha256(rsa2048_pkcs1_sha256::Command),
 }
 
 impl Subcommand for Command {
     async fn run(self, local: Bootstrap) -> eyre::Result<()> {
         match self {
             Self::Rsa3072Pkcs1Sha256(cmd) => cmd.run(local).await,
+            Self::Rsa2048Pkcs1Sha256(cmd) => cmd.run(local).await,
         }
     }
 }

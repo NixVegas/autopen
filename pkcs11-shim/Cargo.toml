@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Morgan Jones
+#
+# SPDX-License-Identifier: BlueOak-1.0.0
+
+[package]
+name = "autopen-pkcs11-shim"
+version = "0.1.0"
+description = "A minimal, sign-only PKCS#11 module that brokers signing to autopen."
+license = "BlueOak-1.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+name = "autopen_pkcs11"
+
+[dependencies]
+# The PKCS#11 ABI types + constants (bindgen of the OASIS headers), already in
+# the workspace lockfile via `cryptoki`. We implement the CK_FUNCTION_LIST on top.
+cryptoki-sys = "0.5"
+x509-parser = "0.18.1"
+# The autopen client (C_Sign relays here) — reuses autopen's Cap'n Proto plumbing.
+autopen = { path = ".." }

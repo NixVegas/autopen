@@ -33,11 +33,16 @@ include = [
     "/build.rs",
     "/clippy.toml",
     "/deny.toml",
+    "/pkcs11-shim",
     "/schema",
     "/src",
 ]
 rust-version = "1.95"
 edition = "2024"
+
+[workspace]
+members = ["pkcs11-shim"]
+resolver = "2"
 
 [dependencies]
 camino = "1.2.2"
@@ -53,10 +58,16 @@ clap = { version = "4.6.1", features = [
     "unstable-v5",
 ] }
 color-eyre = { version = "0.6.5", features = ["issue-url"] }
+cryptoki = "0.12.0"
 graviola = "0.4.0"
 iddqd = { version = "0.4.5", default-features = false }
 rcgen = { version = "0.14.8", default-features = false }
+# Portable (num-bigint) RSA for verification keys + the PKCS#11/token path, so
+# the daemon runs on CPUs without the BMI1/AVX features graviola requires
+# (e.g. Tremont/Goldmont Atom). Software signing keys still use graviola.
+rsa = { version = "0.9.8", default-features = false, features = ["std"] }
 rustix = { version = "1.1.4", features = ["fs"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["oid"] }
 time = { version = "0.3.49", features = ["parsing"] }
 tokio = { version = "1.52.3", features = ["fs", "macros", "rt", "signal"] }
 tracing = "0.1.44"

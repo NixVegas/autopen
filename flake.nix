@@ -80,8 +80,44 @@
       );
 
       overlays.default = final: _prev: {
-        autopen = final.callPackage ./nix/autopen/package.nix { };
+        autopen = (final.callPackage ./nix/autopen/package.nix { }).overrideAttrs (
+          finalPackage: previousPackage: {
+            passthru = (previousPackage.passthru or { }) // {
+              # A nixpkcs-style PKCS#11 module descriptor for the client shim, so
+              # nixpkcs can mint URIs (module-path=libautopen_pkcs11.so) that route
+              # signing through the autopen daemon rather than the token directly.
+              # The daemon holds the PIN, so there is no pin-source and login is a
+              # no-op; per-key `remoteKey`/`cert` are supplied via mkEnv.
+              pkcs11Module = {
+                path = "${finalPackage.finalPackage}/lib/libautopen_pkcs11.so";
+                openSslOptions = {
+                  pkcs11-module-login-behavior = "never";
+                };
+                mkEnv =
+                  {
+                    remoteKey,
+                    cert,
+                    label ? "autopen",
+                    id ? null,
+                    extraEnv ? { },
+                  }:
+                  {
+                    AUTOPEN_REMOTE_KEY = toString remoteKey;
+                    AUTOPEN_CERT = toString cert;
+                    AUTOPEN_LABEL = label;
+                  }
+                  // final.lib.optionalAttrs (id != null) { AUTOPEN_ID = id; }
+                  // extraEnv;
+              };
+            };
+          }
+        );
       };
+
+      # The `services.autopen` NixOS module. Apply `overlays.default` for the
+      # `autopen` package it defaults to.
+      nixosModules.default = import ./nix/autopen/nixos-module.nix;
+      nixosModules.autopen = self.nixosModules.default;
 
       checks = eachSystem (
         system: _pkgs:
@@ -99,6 +135,12 @@
 
             packages = [
               pkgs.rust-analyzer
+              # Hardware-signing (treewide/hardware-signing): a software PKCS#11
+              # token for hermetic tests (kryoptic), a CLI to drive it (opensc's
+              # pkcs11-tool), and openssl for signature verification.
+              pkgs.kryoptic
+              pkgs.opensc
+              pkgs.openssl
             ]
             ++ attrValues treefmtEval.${system}.config.build.programs;
           };

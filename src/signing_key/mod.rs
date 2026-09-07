@@ -4,6 +4,7 @@
 
 //! Signing keys.
 
+pub(crate) mod hardware;
 pub(crate) mod remote;
 pub(crate) mod software;
 

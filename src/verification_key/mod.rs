@@ -4,6 +4,7 @@
 
 //! Verification keys.
 
+pub(crate) mod rsa2048_pkcs1_sha256;
 pub(crate) mod rsa3072_pkcs1_sha256;
 
 use std::{
@@ -23,6 +24,19 @@ use crate::{
 pub(crate) enum VerificationKey {
     /// An `rsa3072-pkcs1-sha256` verification key.
     Rsa3072Pkcs1Sha256(rsa3072_pkcs1_sha256::VerificationKey),
+    /// An `rsa2048-pkcs1-sha256` verification key.
+    Rsa2048Pkcs1Sha256(rsa2048_pkcs1_sha256::VerificationKey),
+}
+
+impl VerificationKey {
+    /// The length in bytes of a signature produced with this key (its modulus
+    /// length): 384 for RSA‐3072, 256 for RSA‐2048.
+    pub(crate) const fn signature_len(&self) -> usize {
+        match self {
+            Self::Rsa3072Pkcs1Sha256(_) => 384,
+            Self::Rsa2048Pkcs1Sha256(_) => 256,
+        }
+    }
 }
 
 impl Serialize for VerificationKey {
@@ -36,13 +50,16 @@ impl Serialize for VerificationKey {
             verification_key::Rsa3072Pkcs1Sha256(reader) => {
                 Ok(rsa3072_pkcs1_sha256::VerificationKey::read_capnp(restorer, reader?)?.into())
             }
-            verification_key::Reserved(()) => Err(capnp::NotInSchema(1).into()),
+            verification_key::Rsa2048Pkcs1Sha256(reader) => {
+                Ok(rsa2048_pkcs1_sha256::VerificationKey::read_capnp(restorer, reader?)?.into())
+            }
         }
     }
 
     fn build_capnp(&self, builder: verification_key::Builder<'_>) -> capnp::Result<()> {
         match self {
             Self::Rsa3072Pkcs1Sha256(key) => key.build_capnp(builder.init_rsa3072_pkcs1_sha256()),
+            Self::Rsa2048Pkcs1Sha256(key) => key.build_capnp(builder.init_rsa2048_pkcs1_sha256()),
         }
     }
 }
@@ -67,6 +84,12 @@ impl SerializeFile for VerificationKey {
 impl From<rsa3072_pkcs1_sha256::VerificationKey> for VerificationKey {
     fn from(key: rsa3072_pkcs1_sha256::VerificationKey) -> Self {
         Self::Rsa3072Pkcs1Sha256(key)
+    }
+}
+
+impl From<rsa2048_pkcs1_sha256::VerificationKey> for VerificationKey {
+    fn from(key: rsa2048_pkcs1_sha256::VerificationKey) -> Self {
+        Self::Rsa2048Pkcs1Sha256(key)
     }
 }
 
@@ -103,6 +126,7 @@ impl Verifier for VerificationKey {
     fn verify(&self, message: &[u8], signature: &[u8]) -> Result<(), VerifyError> {
         match self {
             Self::Rsa3072Pkcs1Sha256(key) => key.verify(message, signature),
+            Self::Rsa2048Pkcs1Sha256(key) => key.verify(message, signature),
         }
     }
 }
@@ -111,12 +135,14 @@ impl x509::SubjectPublicKey for VerificationKey {
     fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
         match self {
             Self::Rsa3072Pkcs1Sha256(key) => key.algorithm(),
+            Self::Rsa2048Pkcs1Sha256(key) => key.algorithm(),
         }
     }
 
     fn to_subject_public_key(&self) -> Vec<u8> {
         match self {
             Self::Rsa3072Pkcs1Sha256(key) => key.to_subject_public_key(),
+            Self::Rsa2048Pkcs1Sha256(key) => key.to_subject_public_key(),
         }
     }
 }

@@ -209,9 +209,24 @@ in
       #
       # We use an empty directory here, as files can could be subject
       # to a hard‐linking attack via store optimization.
+      #
+      # Seed the handle name from the verification key's *content*, not its
+      # store path. The content is a deterministic Cap'n Proto encoding of the
+      # public key and is byte-identical across nixpkgs; the store path is
+      # input-addressed and is not (a 26.05 daemon and an unstable client build
+      # the same key to different paths). A path-based seed therefore makes the
+      # handle silently nixpkgs-dependent, defeating the "stable per key
+      # configuration" property above.
+      #
+      # A key built by `verificationKey.fromCertificate { hash = …; }` is a
+      # fixed-output derivation and exposes `handleSeed`: its committed content
+      # hash in base16 -- the same value hashFile would compute, but derived
+      # purely (no import-from-derivation). Prefer it. Without a committed hash
+      # there is no pure seed, so fall back to hashFile, which realizes the (tiny)
+      # key during evaluation (an IFD on this path).
       fileRefPath = builtins.path {
         path = ./.;
-        name = "${name}-key-handle-${hashString "sha256" "${verificationKey}"}";
+        name = "${name}-key-handle-${args.verificationKey.handleSeed or (builtins.hashFile "sha256" args.verificationKey)}";
         filter = _: _: false;
       };
     in
